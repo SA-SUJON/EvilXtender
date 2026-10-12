@@ -1,0 +1,57 @@
+# Every push/PR: compile the sketch (catches broken code). Push a tag like v1.2.3: also publish the .bin.
+# The repo has RangeExtender.ino at its root. arduino-cli needs the folder name to equal the sketch name,
+# so the workflow copies it into a temporary RangeExtender/ folder first.
+name: ESP8266 firmware
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+env:
+  SKETCH: RangeExtender
+  FQBN: esp8266:esp8266:nodemcuv2
+  ESP_INDEX: https://arduino.esp8266.com/stable/package_esp8266com_index.json
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install arduino-cli and the ESP8266 core
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/.local/bin" sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/arduino-cli" core update-index --additional-urls "$ESP_INDEX"
+          "$HOME/.local/bin/arduino-cli" core install esp8266:esp8266 --additional-urls "$ESP_INDEX"
+
+      - name: Compile
+        run: |
+          mkdir -p "$RUNNER_TEMP/sketch/$SKETCH"
+          cp ./*.ino "$RUNNER_TEMP/sketch/$SKETCH/"
+          arduino-cli compile --fqbn "$FQBN" --output-dir "$RUNNER_TEMP/out" "$RUNNER_TEMP/sketch/$SKETCH"
+          ls -l "$RUNNER_TEMP/out"
+
+      - name: Publish firmware to the release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bin="$RUNNER_TEMP/out/$SKETCH.ino.bin"
+          [ -f "$bin" ] || { echo "::error::Compiled .bin not found"; ls -l "$RUNNER_TEMP/out"; exit 1; }
+          cp "$bin" "RangeExtender-${GITHUB_REF_NAME}.bin"
+          sha256sum "RangeExtender-${GITHUB_REF_NAME}.bin" > SHA256SUMS.txt
+          flags=()
+          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "RangeExtender-${GITHUB_REF_NAME}.bin" SHA256SUMS.txt --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "RangeExtender-${GITHUB_REF_NAME}.bin" SHA256SUMS.txt \
+              --title "$GITHUB_REF_NAME" --generate-notes "${flags[@]}"
+          fi
