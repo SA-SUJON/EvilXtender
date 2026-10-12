@@ -1,0 +1,33 @@
+name: Dependabot auto-merge
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge for safe updates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          shopt -s nocasematch
+          group_re='bump the .+ group'
+          single_re='bump .+ from v?([0-9]+)[^ ]* to v?([0-9]+)'
+          safe=0
+          if [[ "$PR_TITLE" =~ $group_re ]]; then
+            safe=1   # grouped PRs only contain minor/patch updates (see dependabot.yml)
+          elif [[ "$PR_TITLE" =~ $single_re ]] && [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[2]}" ]; then
+            safe=1   # same major version
+          fi
+          if [ "$safe" = 1 ]; then
+            gh pr merge --auto --squash "$PR_URL"
+          else
+            echo "Major or unrecognised update: leaving it for manual review."
+          fi
